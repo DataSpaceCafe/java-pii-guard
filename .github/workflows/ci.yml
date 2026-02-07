@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pytest testcontainers psycopg2-binary
+
+      - name: Lint Python
+        run: flake8 airflow
+
+      - name: Pytest (testcontainers)
+        run: pytest airflow/tests
+
+      - name: Maven verify (JUnit + SpotBugs)
+        run: mvn -B verify
+
+      - name: Docker build
+        run: docker build -t java-pii-guard:ci .

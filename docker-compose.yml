@@ -1,0 +1,98 @@
+version: "3.9"
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: pii-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./data/minio:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minio minio123;
+      mc mb -p local/pii-bucket || true;
+      mc cp /seed/input.csv local/pii-bucket/input/input.csv;
+      exit 0;"
+    volumes:
+      - ./data/seed:/seed:ro
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: pii-postgres
+    environment:
+      POSTGRES_DB: pii
+      POSTGRES_USER: pii
+      POSTGRES_PASSWORD: pii
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+    container_name: pii-elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.http.ssl.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.2
+    container_name: pii-kibana
+    depends_on:
+      - elasticsearch
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    container_name: pii-presidio-analyzer
+    environment:
+      ANONYMIZER_URL: http://presidio-anonymizer:3000
+    ports:
+      - "3000:3000"
+
+  presidio-anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:latest
+    container_name: pii-presidio-anonymizer
+    ports:
+      - "3001:3000"
+
+  pii-guard:
+    build:
+      context: .
+    container_name: pii-guard
+    depends_on:
+      - minio
+      - minio-init
+      - postgres
+      - elasticsearch
+      - presidio-analyzer
+      - presidio-anonymizer
+    environment:
+      CONFIG_PATH: /app/config/config.yaml
+      LOG_LEVEL: INFO
+      MINIO_ACCESS_KEY: minio
+      MINIO_SECRET_KEY: minio123
+      POSTGRES_USER: pii
+      POSTGRES_PASSWORD: pii
+      PII_HASH_SALT: PLACEHOLDER_SALT
+      S3_PATH_STYLE_ACCESS: "true"
+    volumes:
+      - ./config:/app/config
